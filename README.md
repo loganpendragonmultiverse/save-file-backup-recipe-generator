@@ -41,3 +41,11 @@ is performed. Verification is incompatible with archive mode. It compares the
 copied files at that moment and does not establish that a live game or cloud sync
 is idle; close them before running the reviewed recipe. Omit `--verify` to retain
 the existing generated recipes.
+
+Verification checks both source and destination roots and their existing ancestors
+on the execution host. Symlinks and PowerShell reparse points (including junctions)
+are rejected before inventory or copy and during post-copy checks. Destination
+collisions still stop the recipe. These are point-in-time checks, not an atomic
+filesystem operation: keep the game, sync software and other path-changing
+processes stopped throughout execution. Do not run recipes against paths that
+another process can replace concurrently.

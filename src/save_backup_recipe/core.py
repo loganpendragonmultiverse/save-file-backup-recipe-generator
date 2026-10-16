@@ -31,6 +31,8 @@ def powershell_recipe(source: Path, destination: Path, mode: str, verify: bool =
     if verify:
         lines.extend(POWERSHELL_SNAPSHOT.splitlines())
         lines.append("$beforeCopy = Get-SaveSnapshot $saveSource")
+        lines.append("Assert-SaveDirectoryPath $saveSource")
+        lines.append("Assert-SaveDirectoryPath $backupTarget")
     if mode == "copy":
         lines.extend(
             [
@@ -71,6 +73,10 @@ def bash_recipe(source: Path, destination: Path, mode: str, verify: bool = False
         lines.extend(BASH_SNAPSHOT.splitlines())
         lines.append('before_copy=$(save_snapshot "$save_source")')
     if mode == "copy":
+        if verify:
+            lines.extend(
+                ['save_snapshot "$save_source" guard', 'save_snapshot "$backup_target" guard']
+            )
         lines.append('cp -a -- "$save_source" "$backup_target"')
     elif mode == "archive":
         lines.append(
@@ -99,13 +105,30 @@ def generate(source: Path, destination: Path, shell: str, mode: str, verify: boo
 
 BASH_SNAPSHOT = r"""# Verification requires Python 3. Symlinks and special files are rejected.
 save_snapshot() {
-python3 - "$1" <<'VERIFY_PY'
+python3 - "$1" "${2:-snapshot}" <<'VERIFY_PY'
 import hashlib
 import json
 import os
 import stat
 import sys
-root = sys.argv[1]
+root = os.path.abspath(sys.argv[1])
+components = []
+current = root
+while True:
+    components.append(current)
+    parent = os.path.dirname(current)
+    if parent == current:
+        break
+    current = parent
+for component in reversed(components):
+    try:
+        mode = os.lstat(component).st_mode
+    except FileNotFoundError:
+        break
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise SystemExit("Verification requires directory paths without links in roots or ancestors.")
+if sys.argv[2] == "guard":
+    sys.exit(0)
 if not os.path.isdir(root) or os.path.islink(root):
     raise SystemExit("Verification requires an existing regular directory.")
 entries = {}
@@ -129,7 +152,27 @@ VERIFY_PY
 }"""
 
 POWERSHELL_SNAPSHOT = r"""# Inventory includes hidden and empty files; links fail closed.
+function Assert-SaveDirectoryPath([string]$Path) {
+    $components = [System.Collections.Generic.List[string]]::new()
+    $current = [System.IO.Path]::GetFullPath($Path)
+    while ($current) {
+        $components.Insert(0, $current)
+        $parent = [System.IO.Directory]::GetParent($current)
+        $current = if ($null -eq $parent) { $null } else { $parent.FullName }
+    }
+    foreach ($component in $components) {
+        try {
+            $entry = Get-Item -LiteralPath $component -Force -ErrorAction Stop
+        } catch [System.Management.Automation.ItemNotFoundException] {
+            return
+        }
+        if (($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or -not $entry.PSIsContainer) {
+            throw 'Verification requires directory paths without links in roots or ancestors.'
+        }
+    }
+}
 function Get-SaveSnapshot([string]$Root) {
+    Assert-SaveDirectoryPath $Root
     $snapshot = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
     foreach ($entry in Get-ChildItem -LiteralPath $Root -Force -Recurse) {
         if ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {

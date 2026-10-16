@@ -115,3 +115,130 @@ def test_empty_tree_and_link_rejection(tmp_path, shell):
     result = run_recipe(tmp_path, shell, generate(source, other, shell, "copy", True))
     assert result.returncode != 0
     assert "Backup completed" not in result.stdout
+
+
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
+@pytest.mark.parametrize(
+    "position",
+    ["source-root", "source-ancestor", "target-root", "target-ancestor", "broken-target"],
+)
+def test_execution_host_root_and_ancestor_links(tmp_path, shell, position):
+    source, target = tmp_path / "source", tmp_path / "target"
+    real = tmp_path / "real"
+    real.mkdir()
+    if position == "source-root":
+        fixture(real / "saves")
+        link, referent = source, real / "saves"
+    elif position == "source-ancestor":
+        source = tmp_path / "source-link" / "saves"
+        fixture(real / "saves")
+        link, referent = source.parent, real
+    else:
+        fixture(source)
+        if position == "target-ancestor":
+            target = tmp_path / "target-link" / "saves"
+            link, referent = target.parent, real
+        else:
+            link, referent = target, real if position == "target-root" else real / "missing"
+    # Generate before the execution host introduces the link, so generator-side resolve cannot hide it.
+    script = generate(source, target, shell, "copy", True)
+    before = hashes(real)
+    try:
+        link.symlink_to(referent, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks unavailable")
+    result = run_recipe(tmp_path, shell, script)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "Backup completed" not in result.stdout
+    assert "without links" in result.stderr or "already exists" in result.stderr
+    assert hashes(real) == before
+    if position.startswith("source"):
+        assert not target.exists()
+    if position == "target-ancestor":
+        assert not (real / "saves").exists()
+
+
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
+def test_destination_root_replaced_after_copy(tmp_path, shell):
+    source, target = tmp_path / "source", tmp_path / "target"
+    fixture(source)
+    real = tmp_path / "other"
+    real.mkdir()
+    script = generate(source, target, shell, "copy", True)
+    parked = tmp_path / "parked"
+    if shell == "bash":
+        mutation = f'mv -- "$backup_target" "{parked}"; ln -s -- "{real}" "$backup_target"'
+        copy = 'cp -a -- "$save_source" "$backup_target"'
+    else:
+        mutation = (
+            f"Move-Item -LiteralPath $backupTarget -Destination '{parked}'; "
+            f"New-Item -ItemType {'Junction' if os.name == 'nt' else 'SymbolicLink'} -Path $backupTarget -Target '{real}' | Out-Null"
+        )
+        copy = "Copy-Item -LiteralPath $saveSource -Destination $backupTarget -Recurse -Force"
+    script = script.replace(copy, copy + "\n" + mutation)
+    result = run_recipe(tmp_path, shell, script)
+    assert result.returncode != 0
+    assert "Backup completed" not in result.stdout
+    assert hashes(parked) == hashes(source)
+    assert not list(real.iterdir())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junction semantics")
+@pytest.mark.parametrize(
+    "position", ["source-root", "source-ancestor", "target-root", "target-ancestor"]
+)
+def test_powershell_junction_paths(tmp_path, position):
+    source, target = tmp_path / "source", tmp_path / "target"
+    real = tmp_path / "real"
+    real.mkdir()
+    if position == "source-root":
+        fixture(real / "saves")
+        link, referent = source, real / "saves"
+    elif position == "source-ancestor":
+        source = tmp_path / "source-link" / "saves"
+        fixture(real / "saves")
+        link, referent = source.parent, real
+    else:
+        fixture(source)
+        if position == "target-ancestor":
+            target = tmp_path / "target-link" / "saves"
+            link, referent = target.parent, real
+        else:
+            link, referent = target, real
+    script = generate(source, target, "powershell", "copy", True)
+    setup = f"New-Item -ItemType Junction -Path '{link}' -Target '{referent}' | Out-Null\n"
+    result = run_recipe(
+        tmp_path, "powershell", "$ErrorActionPreference = 'Stop'\n" + setup + script
+    )
+    assert result.returncode != 0
+    assert "without links" in result.stderr
+    assert "Backup completed" not in result.stdout
+    if position.startswith("source"):
+        assert not target.exists()
+    else:
+        assert not (real / "saves").exists()
+
+
+@pytest.mark.parametrize("shell", ["bash", "powershell"])
+def test_source_root_becomes_link_after_inventory(tmp_path, shell):
+    source, target, parked = tmp_path / "source", tmp_path / "target", tmp_path / "parked"
+    fixture(source)
+    original = hashes(source)
+    script = generate(source, target, shell, "copy", True)
+    if shell == "bash":
+        inventory = 'before_copy=$(save_snapshot "$save_source")'
+        mutation = f'mv -- "$save_source" "{parked}"; ln -s -- "{parked}" "$save_source"'
+    else:
+        inventory = "$beforeCopy = Get-SaveSnapshot $saveSource"
+        kind = "Junction" if os.name == "nt" else "SymbolicLink"
+        mutation = (
+            f"Move-Item -LiteralPath $saveSource -Destination '{parked}'; "
+            f"New-Item -ItemType {kind} -Path $saveSource -Target '{parked}' | Out-Null"
+        )
+    script = script.replace(inventory, inventory + "\n" + mutation)
+    result = run_recipe(tmp_path, shell, script)
+    assert result.returncode != 0
+    assert "without links" in result.stderr
+    assert "Backup completed" not in result.stdout
+    assert not target.exists()
+    assert hashes(parked) == original
