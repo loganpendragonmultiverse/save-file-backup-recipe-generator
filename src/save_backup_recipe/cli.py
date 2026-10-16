@@ -14,9 +14,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shell", choices=("powershell", "bash"), default="powershell")
     parser.add_argument("--mode", choices=("copy", "archive"), default="copy")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--verify", action="store_true", help="Verify copy file count and SHA-256 before success"
+    )
     args = parser.parse_args(argv)
     try:
-        recipe = generate(args.source, args.destination, args.shell, args.mode)
+        recipe = generate(args.source, args.destination, args.shell, args.mode, args.verify)
         if args.output:
             if args.output.exists():
                 raise ValueError(f"output already exists: {args.output}")

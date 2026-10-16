@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0 - 2026-10-16
+
+- Added opt-in copy verification using file counts, relative paths and SHA-256.
+- Reject linked source/destination roots and existing ancestors at runtime, including PowerShell junctions.
+- Added disposable fixture execution tests and kept default recipes unchanged.
+
 ## 1.0.0 - 2026-07-26
 
 - Added PowerShell and Bash backup recipe generation.
