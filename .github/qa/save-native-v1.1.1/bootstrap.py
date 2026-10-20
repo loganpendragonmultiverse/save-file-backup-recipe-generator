@@ -25,7 +25,12 @@ def save(name,data):
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 try:
     assert platform.system()=='Windows' and sys.version_info>=(3,10)
-    raw=Path(args.bundle).read_bytes();assert hashlib.sha256(raw).hexdigest()=='e7a56dca287089b45af13477f8b61e85d5e42db18a95c894aebcfef1250bfeb2';bundle=json.loads(raw)
+    raw=Path(args.bundle).read_bytes()
+    committed=subprocess.check_output(['git','show','HEAD:.github/qa/save-native-v1.1.1/transfer.json'])
+    save('TRANSFER-BYTES.json',{'expected_sha256':'e7a56dca287089b45af13477f8b61e85d5e42db18a95c894aebcfef1250bfeb2','working_tree_sha256':hashlib.sha256(raw).hexdigest(),'working_tree_bytes':len(raw),'working_tree_lf':raw.count(b'\n'),'working_tree_crlf':raw.count(b'\r\n'),'committed_sha256':hashlib.sha256(committed).hexdigest(),'committed_bytes':len(committed),'committed_lf':committed.count(b'\n'),'committed_crlf':committed.count(b'\r\n'),'working_tree_bootstrap_sha256':digest(Path(__file__))})
+    assert hashlib.sha256(raw).hexdigest()=='e7a56dca287089b45af13477f8b61e85d5e42db18a95c894aebcfef1250bfeb2'
+    assert hashlib.sha256(committed).hexdigest()=='e7a56dca287089b45af13477f8b61e85d5e42db18a95c894aebcfef1250bfeb2'
+    bundle=json.loads(raw)
     assert bundle['schema_version']==1 and bundle['slug']=='save-file-backup-recipe-generator'
     assert bundle['version']=='v1.1.1' and bundle['commit']=='47dea37455b93047330350637fe63780d99f2e65'
     assert bundle['tag_object']=='f05e77288d5fa4622d376cd50454d747071481b2' and bundle['tag_run']==39485085532
