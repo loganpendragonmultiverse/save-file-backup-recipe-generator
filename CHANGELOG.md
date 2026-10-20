@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 - 2026-10-20
+
+- Protect recipe outputs with exclusive creation and dangling-link guards.
+- Preserve verification link rejection before generation-time path resolution and validate boolean controls.
+- Reject dangling backup targets in generated recipes and protect dash-leading archive source names.
+- Document host-local path generation and unverified archive/hidden-file limitations.
+
 ## 1.1.0 - 2026-10-16
 
 - Added opt-in copy verification using file counts, relative paths and SHA-256.

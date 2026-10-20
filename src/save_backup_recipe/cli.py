@@ -21,12 +21,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         recipe = generate(args.source, args.destination, args.shell, args.mode, args.verify)
         if args.output:
-            if args.output.exists():
+            if args.output.exists() or args.output.is_symlink():
                 raise ValueError(f"output already exists: {args.output}")
-            args.output.write_text(recipe, encoding="utf-8", newline="\n")
+            with args.output.open("x", encoding="utf-8", newline="\n") as output:
+                output.write(recipe)
         else:
             sys.stdout.write(recipe)
-    except (OSError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0
