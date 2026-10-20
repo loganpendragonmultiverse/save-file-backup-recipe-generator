@@ -4,7 +4,20 @@ import shlex
 from pathlib import Path
 
 
-def validate_paths(source: Path, destination: Path) -> tuple[Path, Path]:
+def validate_paths(source: Path, destination: Path, verify: bool = False) -> tuple[Path, Path]:
+    if type(verify) is not bool:
+        raise TypeError("verify must be a boolean")
+    if destination.expanduser().is_symlink():
+        raise ValueError("destination already exists as a symbolic link")
+    if verify:
+        for path in (source.expanduser().absolute(), destination.expanduser().absolute()):
+            for node in (path, *path.parents):
+                if (
+                    node.is_symlink()
+                    or (hasattr(node, "is_junction") and node.is_junction())
+                    or (node.exists() and getattr(node.lstat(), "st_file_attributes", 0) & 0x400)
+                ):
+                    raise ValueError("verification paths must not contain links or reparse points")
     source = source.expanduser().resolve()
     destination = destination.expanduser().resolve()
     if source == destination:
@@ -21,7 +34,7 @@ def _ps(value: Path) -> str:
 def powershell_recipe(source: Path, destination: Path, mode: str, verify: bool = False) -> str:
     if verify and mode != "copy":
         raise ValueError("verification requires copy mode; archive verification is unsupported")
-    source, destination = validate_paths(source, destination)
+    source, destination = validate_paths(source, destination, verify)
     lines = [
         "$ErrorActionPreference = 'Stop'",
         f"$saveSource = {_ps(source)}",
@@ -36,14 +49,14 @@ def powershell_recipe(source: Path, destination: Path, mode: str, verify: bool =
     if mode == "copy":
         lines.extend(
             [
-                "if (Test-Path -LiteralPath $backupTarget) { throw 'Backup target already exists.' }",
+                "if ((Test-Path -LiteralPath $backupTarget) -or (Get-Item -LiteralPath $backupTarget -Force -ErrorAction SilentlyContinue)) { throw 'Backup target already exists.' }",
                 "Copy-Item -LiteralPath $saveSource -Destination $backupTarget -Recurse",
             ]
         )
     elif mode == "archive":
         lines.extend(
             [
-                "if (Test-Path -LiteralPath $backupTarget) { throw 'Backup archive already exists.' }",
+                "if ((Test-Path -LiteralPath $backupTarget) -or (Get-Item -LiteralPath $backupTarget -Force -ErrorAction SilentlyContinue)) { throw 'Backup archive already exists.' }",
                 "Compress-Archive -LiteralPath $saveSource -DestinationPath $backupTarget",
             ]
         )
@@ -59,7 +72,7 @@ def powershell_recipe(source: Path, destination: Path, mode: str, verify: bool =
 def bash_recipe(source: Path, destination: Path, mode: str, verify: bool = False) -> str:
     if verify and mode != "copy":
         raise ValueError("verification requires copy mode; archive verification is unsupported")
-    source, destination = validate_paths(source, destination)
+    source, destination = validate_paths(source, destination, verify)
     src, dst = shlex.quote(str(source)), shlex.quote(str(destination))
     lines = [
         "#!/usr/bin/env bash",
@@ -67,7 +80,7 @@ def bash_recipe(source: Path, destination: Path, mode: str, verify: bool = False
         f"save_source={src}",
         f"backup_target={dst}",
         "[[ -d \"$save_source\" ]] || { echo 'Save folder not found.' >&2; exit 1; }",
-        "[[ ! -e \"$backup_target\" ]] || { echo 'Backup target already exists.' >&2; exit 1; }",
+        '[[ ! -e "$backup_target" && ! -L "$backup_target" ]] || { echo \'Backup target already exists.\' >&2; exit 1; }',
     ]
     if verify:
         lines.extend(BASH_SNAPSHOT.splitlines())
@@ -80,7 +93,7 @@ def bash_recipe(source: Path, destination: Path, mode: str, verify: bool = False
         lines.append('cp -a -- "$save_source" "$backup_target"')
     elif mode == "archive":
         lines.append(
-            'tar -czf "$backup_target" -C "$(dirname "$save_source")" "$(basename "$save_source")"'
+            'tar -czf "$backup_target" -C "$(dirname "$save_source")" -- "$(basename "$save_source")"'
         )
     else:
         raise ValueError("mode must be copy or archive")
